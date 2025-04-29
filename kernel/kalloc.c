@@ -80,3 +80,15 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+// Return the number of free pages in the kernel.
+void kama_freebytes(uint64 *dst) {
+  *dst = 0;
+  struct run* p = kmem.freelist;
+  acquire(&kmem.lock);//lock the memory allocator
+  while (p) {
+    *dst += PGSIZE;//add up the free memory
+    p = p->next;
+  }
+  release(&kmem.lock);//release the lock
+}
