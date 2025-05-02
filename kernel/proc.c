@@ -34,12 +34,12 @@ procinit(void)
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      //char *pa = kalloc();
+      //if(pa == 0)
+      //  panic("kalloc");
+      //uint64 va = KSTACK((int) (p - proc));
+      //kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      //p->kstack = va;
   }
   kvminithart();
 }
@@ -121,6 +121,17 @@ found:
     return 0;
   }
 
+  // create kernelpgtbl for new proc
+  p->kama_kernelpgtbl = kama_kvminit_newpgtbl();
+
+  // allocate kernel stack
+  char* pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int)0);
+  kvmmap(p->kama_kernelpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va; // record vitual address
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -128,6 +139,21 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   return p;
+}
+
+// only free own kernelpgtbl
+void
+kama_kvm_free_kernelpgtbl(pagetable_t pagetable)
+{
+  for (int i = 0; i < 512; ++i) {
+    pte_t pte = pagetable[i];
+    uint64 child = PTE2PA(pte);
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      kama_kvm_free_kernelpgtbl((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
 }
 
 // free a proc structure and the data hanging from it,
@@ -149,6 +175,15 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+
+  //free kernelstack
+  void* kstack_pa = (void*)kvmpa(p->kama_kernelpgtbl, p->kstack);
+  kfree(kstack_pa);
+  p->kstack = 0;
+
+  //only free own kernelpgtbl
+  kama_kvm_free_kernelpgtbl(p->kama_kernelpgtbl);
+  p->kama_kernelpgtbl = 0;
   p->state = UNUSED;
 }
 
@@ -473,7 +508,16 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // switch to own kernelpgtbl
+        w_satp(MAKE_SATP(p->kama_kernelpgtbl));
+        sfence_vma();
+
+        // deploy, run proc
         swtch(&c->context, &p->context);
+
+        // back to global kernelpgtbl
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
