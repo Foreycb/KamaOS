@@ -132,3 +132,16 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+// Print a backtrace of the current process.
+void kama_backtrace()
+{
+  uint64 fp = r_fp();
+  asm volatile("mv %0, s0" : "=r"(fp));
+  printf("backtrace:\n");
+  while (PGROUNDDOWN(fp) != PGROUNDUP(fp)) {
+    uint64 ra = *(uint64 *)(fp - 8);
+    printf("%p\n", ra);
+    fp = *(uint64 *)(fp - 16);
+  }
+}
